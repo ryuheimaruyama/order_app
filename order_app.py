@@ -11,9 +11,7 @@ st.set_page_config(
 
 # --- データベース接続関数 (SQLite) ---
 def get_connection():
-  # ファイル型のSQLiteデータベースに接続（存在しない場合は自動作成されます）
   conn = sqlite3.connect("water_quality.db")
-  # 辞書形式でカラム名アクセスできるようにRowファクトリを設定
   conn.row_factory = sqlite3.Row
   return conn
 
@@ -61,7 +59,7 @@ def init_db():
     )
     """)
 
-  # 初期管理者ユーザー・初期データがない場合に追加 (必要に応じて)
+  # ユーザーがひとりもいない場合は初期管理者を作成 (ID: admin / PW: admin123)
   cursor.execute("SELECT COUNT(*) FROM users")
   if cursor.fetchone()[0] == 0:
     cursor.execute(
@@ -81,10 +79,13 @@ if "logged_in" not in st.session_state:
   st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-  st.title("消耗品発注システム - ログイン")
+  st.title("📦 消耗品発注システム - ログイン")
+  st.info("初期管理者アカウント ➡️ ログインID: admin | パスワード: admin123")
+
   username = st.text_input("ログインID")
   password = st.text_input("パスワード", type="password")
-  if st.button("ログイン"):
+
+  if st.button("ログイン", type="primary"):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -109,9 +110,9 @@ else:
   if "username" not in st.session_state:
     st.session_state.username = ""
 
-  # --- ログイン後の画面 ---
+  # --- サイドバー表示 ---
   st.sidebar.write(
-      f"👤 ログイン中: {st.session_state.get('name', 'ゲスト')}"
+      f"👤 **{st.session_state.get('name', 'ゲスト')}**"
       f" ({st.session_state.get('department', '')})"
   )
 
@@ -119,7 +120,7 @@ else:
     st.session_state.menu_choice = 0
     st.rerun()
 
-  if st.sidebar.button("ログアウト"):
+  if st.sidebar.button("🚪 ログアウト"):
     st.session_state.logged_in = False
     st.rerun()
 
@@ -471,30 +472,222 @@ else:
   elif choice == "管理者画面":
     st.title("⚙️ 管理者メニュー")
 
-    st.subheader("📦 発注先ごとのデータ抽出 & ステータス管理")
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT vendor_name FROM vendors")
-    vendor_list = [row["vendor_name"] for row in cursor.fetchall()]
-    conn.close()
+    admin_tab1, admin_tab2, admin_tab3 = st.tabs(
+        ["📦 発注データ管理", "👥 ユーザーアカウント管理", "🛠️ 発注先の管理"]
+    )
 
-    if len(vendor_list) > 0:
-      selected_vendor = st.selectbox("発注先を選択して抽出", vendor_list)
-
+    # --- TAB 1: 発注データ管理 ---
+    with admin_tab1:
+      st.subheader("発注先ごとのデータ抽出 & ステータス管理")
       conn = get_connection()
       cursor = conn.cursor()
-      sql_admin = """
-            SELECT id, order_datetime, department, user_name, item_name, item_code, quantity, unit, remarks, vendor_name, TRIM(status) AS status 
-            FROM orders 
-            WHERE vendor_name = ? AND TRIM(status) IN ('承認済', '発注済み', '納品済', '検収済')
-            ORDER BY id DESC
-            """
-      cursor.execute(sql_admin, (selected_vendor,))
-      admin_rows = cursor.fetchall()
+      cursor.execute("SELECT vendor_name FROM vendors")
+      vendor_list = [row["vendor_name"] for row in cursor.fetchall()]
       conn.close()
 
-      if len(admin_rows) > 0:
-        for row in admin_rows:
+      if len(vendor_list) > 0:
+        selected_vendor = st.selectbox("発注先を選択して抽出", vendor_list)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql_admin = """
+                SELECT id, order_datetime, department, user_name, item_name, item_code, quantity, unit, remarks, vendor_name, TRIM(status) AS status 
+                FROM orders 
+                WHERE vendor_name = ? AND TRIM(status) IN ('承認済', '発注済み', '納品済', '検収済')
+                ORDER BY id DESC
+                """
+        cursor.execute(sql_admin, (selected_vendor,))
+        admin_rows = cursor.fetchall()
+        conn.close()
+
+        if len(admin_rows) > 0:
+          for row in admin_rows:
+            with st.container():
+              col_info, col_action = st.columns([2.5, 1.5])
+              with col_info:
+                st.write(
+                    f"**【現在のステータス: {row['status']}】 {row['item_name']}**"
+                    f" （{row['quantity']}{row['unit']}）"
+                )
+                st.caption(
+                    f"発注日時: {row['order_datetime']} | 部署:"
+                    f" {row['department']} | 担当者: {row['user_name']} | 品番:"
+                    f" {row['item_code'] or 'なし'}"
+                )
+                if row["remarks"]:
+                  st.caption(f"備考: {row['remarks']}")
+
+                current_v_index = (
+                    vendor_list.index(row["vendor_name"])
+                    if row["vendor_name"] in vendor_list
+                    else 0
+                )
+                new_assigned_vendor = st.selectbox(
+                    "発注先の変更",
+                    vendor_list,
+                    index=current_v_index,
+                    key=f"change_v_box_{row['id']}",
+                )
+                if new_assigned_vendor != row["vendor_name"]:
+                  if st.button(
+                      "発注先を更新する",
+                      key=f"update_v_btn_{row['id']}_{selected_vendor}",
+                  ):
+                    conn_chg = get_connection()
+                    cursor_chg = conn_chg.cursor()
+                    cursor_chg.execute(
+                        "UPDATE orders SET vendor_name=? WHERE id=?",
+                        (new_assigned_vendor, row["id"]),
+                    )
+                    conn_chg.commit()
+                    conn_chg.close()
+                    st.success("発注先を変更しました！")
+                    st.rerun()
+
+              with col_action:
+                st.markdown("**🔄 ステータス変更**")
+                status_options = ["承認済", "発注済み", "納品済", "検収済"]
+                current_s_index = (
+                    status_options.index(row["status"])
+                    if row["status"] in status_options
+                    else 0
+                )
+
+                new_status = st.selectbox(
+                    "ステータス選択",
+                    status_options,
+                    index=current_s_index,
+                    label_visibility="collapsed",
+                    key=f"change_s_box_{row['id']}",
+                )
+
+                if new_status != row["status"]:
+                  conn_s = get_connection()
+                  cursor_s = conn_s.cursor()
+                  cursor_s.execute(
+                      "UPDATE orders SET status=? WHERE id=?",
+                      (new_status, row["id"]),
+                  )
+                  conn_s.commit()
+                  conn_s.close()
+                  st.success(f"「{new_status}」に変更しました！")
+                  st.rerun()
+
+              st.divider()
+
+          conn = get_connection()
+          cursor = conn.cursor()
+          cursor.execute(sql_admin, (selected_vendor,))
+          admin_rows_fresh = cursor.fetchall()
+          conn.close()
+
+          csv_rows = [
+              row for row in admin_rows_fresh if row["status"] == "承認済"
+          ]
+
+          if len(csv_rows) > 0:
+            df_csv = pd.DataFrame([dict(r) for r in csv_rows])
+            df_csv = df_csv.drop(columns=["id"])
+            df_csv = df_csv[[
+                "order_datetime",
+                "department",
+                "user_name",
+                "item_name",
+                "item_code",
+                "quantity",
+                "unit",
+                "remarks",
+                "vendor_name",
+                "status",
+            ]]
+            df_csv.columns = [
+                "発注日時",
+                "所属",
+                "発注者",
+                "品名",
+                "品番",
+                "数量",
+                "単位",
+                "備考",
+                "発注先",
+                "ステータス",
+            ]
+
+            csv = df_csv.to_csv(index=False).encode(
+                "shift-jis", errors="replace"
+            )
+            st.download_button(
+                label="📥 【承認済のみ】エクセル(CSV)でダウンロードする",
+                data=csv,
+                file_name=f"{selected_vendor}_発注一覧_承認済.csv",
+                mime="text/csv",
+            )
+
+            st.divider()
+
+            copy_text_lines = [
+                f"発注者: {r['user_name']} | 品名: {r['item_name']} | 数量:"
+                f" {r['quantity']}{r['unit']} | 備考: {r['remarks'] or 'なし'}"
+                for r in csv_rows
+            ]
+            st.markdown(
+                "### 📋 【承認済】テキスト表示エリア（コピーしてご利用ください）"
+            )
+            st.text_area(
+                "コピペ用テキスト（発注者・品名・数量・単位・備考）",
+                value="\n".join(copy_text_lines),
+                height=150,
+                key=f"copy_area_{selected_vendor}",
+            )
+
+            if st.button(
+                "📋 ステータスをすべて『発注済み』に変更する",
+                key=f"btn_mark_ordered_{selected_vendor}",
+                type="primary",
+            ):
+              conn_ord = get_connection()
+              cursor_ord = conn_ord.cursor()
+              for r in csv_rows:
+                cursor_ord.execute(
+                    "UPDATE orders SET status='発注済み' WHERE id=?", (r["id"],)
+                )
+              conn_ord.commit()
+              conn_ord.close()
+
+              for r in csv_rows:
+                if f"change_s_box_{r['id']}" in st.session_state:
+                  del st.session_state[f"change_s_box_{r['id']}"]
+
+              st.success("すべての対象データを「発注済み」に変更しました！")
+              st.rerun()
+          else:
+            st.info(
+                "ℹ️ 現在、この発注先には「承認済（未発注）」のデータはありません。"
+            )
+        else:
+          st.warning("この発注先への対象データはありません。")
+      else:
+        st.info("登録されている発注先がありません。")
+
+      st.divider()
+      st.subheader("⚠️ 【発注先未指定】の申請一覧")
+
+      conn_none = get_connection()
+      cursor_none = conn_none.cursor()
+      sql_none = """
+            SELECT id, order_datetime, department, user_name, item_name, item_code, quantity, unit, remarks, vendor_name, TRIM(status) AS status 
+            FROM orders 
+            WHERE (vendor_name IS NULL OR vendor_name = '' OR vendor_name NOT IN (SELECT vendor_name FROM vendors)) 
+              AND TRIM(status) IN ('承認済', '発注済み', '納品済', '検収済')
+            ORDER BY id DESC
+            """
+      cursor_none.execute(sql_none)
+      none_rows = cursor_none.fetchall()
+      conn_none.close()
+
+      if len(none_rows) > 0:
+        st.warning("発注先が選択されていない申請データが見つかりました。")
+        for row in none_rows:
           with st.container():
             col_info, col_action = st.columns([2.5, 1.5])
             with col_info:
@@ -503,38 +696,31 @@ else:
                   f" （{row['quantity']}{row['unit']}）"
               )
               st.caption(
-                  f"発注日時: {row['order_datetime']} | 部署: {row['department']}"
-                  f" | 担当者: {row['user_name']} | 品番:"
+                  f"発注日時: {row['order_datetime']} | 部署:"
+                  f" {row['department']} | 担当者: {row['user_name']} | 品番:"
                   f" {row['item_code'] or 'なし'}"
               )
               if row["remarks"]:
                 st.caption(f"備考: {row['remarks']}")
 
-              current_v_index = (
-                  vendor_list.index(row["vendor_name"])
-                  if row["vendor_name"] in vendor_list
-                  else 0
+              assign_v = st.selectbox(
+                  "発注先を割り当てる",
+                  [""] + vendor_list,
+                  key=f"assign_v_box_{row['id']}",
               )
-              new_assigned_vendor = st.selectbox(
-                  "発注先の変更",
-                  vendor_list,
-                  index=current_v_index,
-                  key=f"change_v_box_{row['id']}",
-              )
-              if new_assigned_vendor != row["vendor_name"]:
+              if assign_v != "":
                 if st.button(
-                    "発注先を更新する",
-                    key=f"update_v_btn_{row['id']}_{selected_vendor}",
+                    "この発注先に設定する", key=f"assign_v_btn_{row['id']}"
                 ):
-                  conn_chg = get_connection()
-                  cursor_chg = conn_chg.cursor()
-                  cursor_chg.execute(
+                  conn_asg = get_connection()
+                  cursor_asg = conn_asg.cursor()
+                  cursor_asg.execute(
                       "UPDATE orders SET vendor_name=? WHERE id=?",
-                      (new_assigned_vendor, row["id"]),
+                      (assign_v, row["id"]),
                   )
-                  conn_chg.commit()
-                  conn_chg.close()
-                  st.success("発注先を変更しました！")
+                  conn_asg.commit()
+                  conn_asg.close()
+                  st.success(f"発注先を「{assign_v}」に設定しました！")
                   st.rerun()
 
             with col_action:
@@ -551,7 +737,7 @@ else:
                   status_options,
                   index=current_s_index,
                   label_visibility="collapsed",
-                  key=f"change_s_box_{row['id']}",
+                  key=f"change_s_none_box_{row['id']}",
               )
 
               if new_status != row["status"]:
@@ -565,268 +751,182 @@ else:
                 conn_s.close()
                 st.success(f"「{new_status}」に変更しました！")
                 st.rerun()
-
             st.divider()
+      else:
+        st.info("現在、発注先が未指定の申請データはありません。")
 
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(sql_admin, (selected_vendor,))
-        admin_rows_fresh = cursor.fetchall()
-        conn.close()
+    # --- TAB 2: ユーザーアカウント管理 ---
+    with admin_tab2:
+      st.subheader("👥 登録済みユーザー一覧")
+      conn = get_connection()
+      cursor = conn.cursor()
+      cursor.execute(
+          "SELECT id, username, name, department, is_approver, is_admin FROM"
+          " users"
+      )
+      all_users = cursor.fetchall()
+      conn.close()
 
-        csv_rows = [
-            row for row in admin_rows_fresh if row["status"] == "承認済"
+      if len(all_users) > 0:
+        df_u = pd.DataFrame([dict(u) for u in all_users])
+        df_u.columns = [
+            "ID",
+            "ログインID",
+            "氏名",
+            "部署",
+            "承認権限",
+            "管理者権限",
         ]
+        df_u["承認権限"] = df_u["承認権限"].map({1: "○", 0: "-"})
+        df_u["管理者権限"] = df_u["管理者権限"].map({1: "○", 0: "-"})
+        st.dataframe(df_u, use_container_width=True)
 
-        if len(csv_rows) > 0:
-          df_csv = pd.DataFrame([dict(r) for r in csv_rows])
-          df_csv = df_csv.drop(columns=["id"])
-          df_csv = df_csv[[
-              "order_datetime",
-              "department",
-              "user_name",
-              "item_name",
-              "item_code",
-              "quantity",
-              "unit",
-              "remarks",
-              "vendor_name",
-              "status",
-          ]]
-          df_csv.columns = [
-              "発注日時",
-              "所属",
-              "発注者",
-              "品名",
-              "品番",
-              "数量",
-              "単位",
-              "備考",
-              "発注先",
-              "ステータス",
-          ]
+      st.divider()
+      st.subheader("➕ 新規ユーザーアカウント作成")
+      with st.form("create_user_form"):
+        col_u1, col_u2 = st.columns(2)
+        with col_u1:
+          c_username = st.text_input("ログインID (半角英数)")
+          c_password = st.text_input("初期パスワード", type="password")
+        with col_u2:
+          c_name = st.text_input("氏名")
+          c_dept = st.text_input("所属部署 (例: 水質課)")
 
-          csv = df_csv.to_csv(index=False).encode(
-              "shift-jis", errors="replace"
-          )
-          st.download_button(
-              label="📥 【承認済のみ】エクセル(CSV)でダウンロードする",
-              data=csv,
-              file_name=f"{selected_vendor}_発注一覧_承認済.csv",
-              mime="text/csv",
-          )
+        col_p1, col_p2 = st.columns(2)
+        with col_p1:
+          c_is_app = st.checkbox("承認権限を付与する (承認画面の利用)")
+        with col_p2:
+          c_is_adm = st.checkbox("管理者権限を付与する (管理者画面の利用)")
 
-          st.divider()
+        btn_create_user = st.form_submit_button("ユーザーを新規登録")
 
-          copy_text_lines = [
-              f"発注者: {r['user_name']} | 品名: {r['item_name']} | 数量:"
-              f" {r['quantity']}{r['unit']} | 備考: {r['remarks'] or 'なし'}"
-              for r in csv_rows
-          ]
-          st.markdown(
-              "### 📋 【承認済】テキスト表示エリア（コピーしてご利用ください）"
-          )
-          st.text_area(
-              "コピペ用テキスト（発注者・品名・数量・単位・備考）",
-              value="\n".join(copy_text_lines),
-              height=150,
-              key=f"copy_area_{selected_vendor}",
-          )
-
-          if st.button(
-              "📋 ステータスをすべて『発注済み』に変更する",
-              key=f"btn_mark_ordered_{selected_vendor}",
-              type="primary",
-          ):
-            conn_ord = get_connection()
-            cursor_ord = conn_ord.cursor()
-            for r in csv_rows:
-              cursor_ord.execute(
-                  "UPDATE orders SET status='発注済み' WHERE id=?", (r["id"],)
-              )
-            conn_ord.commit()
-            conn_ord.close()
-
-            for r in csv_rows:
-              if f"change_s_box_{r['id']}" in st.session_state:
-                del st.session_state[f"change_s_box_{r['id']}"]
-
-            st.success("すべての対象データを「発注済み」に変更しました！")
+      if btn_create_user:
+        if not c_username or not c_password or not c_name:
+          st.warning("ログインID、パスワード、氏名は必須項目です。")
+        else:
+          conn_cu = get_connection()
+          cursor_cu = conn_cu.cursor()
+          try:
+            cursor_cu.execute(
+                "INSERT INTO users (username, password, name, department,"
+                " is_approver, is_admin) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    c_username.strip(),
+                    c_password.strip(),
+                    c_name.strip(),
+                    c_dept.strip(),
+                    1 if c_is_app else 0,
+                    1 if c_is_adm else 0,
+                ),
+            )
+            conn_cu.commit()
+            st.success(f"ユーザー「{c_name} ({c_username})」を作成しました！")
             st.rerun()
-        else:
-          st.info(
-              "ℹ️ 現在、この発注先には「承認済（未発注）」のデータはありません。"
-          )
-      else:
-        st.warning("この発注先への対象データはありません。")
-    else:
-      st.info(
-          "登録されている発注先がありません。下のフォームから追加してください。"
-      )
+          except sqlite3.IntegrityError:
+            st.error("そのログインIDは既に登録されています。")
+          finally:
+            conn_cu.close()
 
-    # 未指定コーナー
-    st.divider()
-    st.subheader("⚠️ 【発注先未指定】の申請一覧")
+      st.divider()
+      st.subheader("❌ ユーザーの削除")
+      if len(all_users) > 0:
+        user_dict = {f"{u['name']} ({u['username']})": u["id"] for u in all_users}
+        del_target = st.selectbox(
+            "削除するユーザーを選択", list(user_dict.keys())
+        )
+        if st.button("このユーザーを削除する", type="primary"):
+          del_id = user_dict[del_target]
+          conn_del_u = get_connection()
+          cursor_del_u = conn_del_u.cursor()
+          cursor_del_u.execute("DELETE FROM users WHERE id=?", (del_id,))
+          conn_del_u.commit()
+          conn_del_u.close()
+          st.success("ユーザーを削除しました。")
+          st.rerun()
 
-    conn_none = get_connection()
-    cursor_none = conn_none.cursor()
-    sql_none = """
-        SELECT id, order_datetime, department, user_name, item_name, item_code, quantity, unit, remarks, vendor_name, TRIM(status) AS status 
-        FROM orders 
-        WHERE (vendor_name IS NULL OR vendor_name = '' OR vendor_name NOT IN (SELECT vendor_name FROM vendors)) 
-          AND TRIM(status) IN ('承認済', '発注済み', '納品済', '検収済')
-        ORDER BY id DESC
-        """
-    cursor_none.execute(sql_none)
-    none_rows = cursor_none.fetchall()
-    conn_none.close()
+    # --- TAB 3: 発注先の管理 ---
+    with admin_tab3:
+      st.subheader("🛠️ 発注先の追加・変更・削除")
+      tab_add, tab_edit = st.tabs(["発注先の追加", "発注先の変更・削除"])
 
-    if len(none_rows) > 0:
-      st.warning("発注先が選択されていない申請データが見つかりました。")
-      for row in none_rows:
-        with st.container():
-          col_info, col_action = st.columns([2.5, 1.5])
-          with col_info:
-            st.write(
-                f"**【現在のステータス: {row['status']}】 {row['item_name']}**"
-                f" （{row['quantity']}{row['unit']}）"
-            )
-            st.caption(
-                f"発注日時: {row['order_datetime']} | 部署: {row['department']}"
-                f" | 担当者: {row['user_name']} | 品番:"
-                f" {row['item_code'] or 'なし'}"
-            )
-            if row["remarks"]:
-              st.caption(f"備考: {row['remarks']}")
-
-            assign_v = st.selectbox(
-                "発注先を割り当てる",
-                [""] + vendor_list,
-                key=f"assign_v_box_{row['id']}",
-            )
-            if assign_v != "":
-              if st.button(
-                  "この発注先に設定する", key=f"assign_v_btn_{row['id']}"
-              ):
-                conn_asg = get_connection()
-                cursor_asg = conn_asg.cursor()
-                cursor_asg.execute(
-                    "UPDATE orders SET vendor_name=? WHERE id=?",
-                    (assign_v, row["id"]),
-                )
-                conn_asg.commit()
-                conn_asg.close()
-                st.success(f"発注先を「{assign_v}」に設定しました！")
-                st.rerun()
-
-          with col_action:
-            st.markdown("**🔄 ステータス変更**")
-            status_options = ["承認済", "発注済み", "納品済", "検収済"]
-            current_s_index = (
-                status_options.index(row["status"])
-                if row["status"] in status_options
-                else 0
-            )
-
-            new_status = st.selectbox(
-                "ステータス選択",
-                status_options,
-                index=current_s_index,
-                label_visibility="collapsed",
-                key=f"change_s_none_box_{row['id']}",
-            )
-
-            if new_status != row["status"]:
-              conn_s = get_connection()
-              cursor_s = conn_s.cursor()
-              cursor_s.execute(
-                  "UPDATE orders SET status=? WHERE id=?",
-                  (new_status, row["id"]),
-              )
-              conn_s.commit()
-              conn_s.close()
-              st.success(f"「{new_status}」に変更しました！")
-              st.rerun()
-          st.divider()
-    else:
-      st.info("現在、発注先が未指定の申請データはありません。")
-
-    st.divider()
-    st.subheader("🛠️ 発注先の管理（追加・変更・削除）")
-    tab_add, tab_edit = st.tabs(["発注先の追加", "発注先の変更・削除"])
-
-    with tab_add:
-      new_vendor = st.text_input(
-          "新しい発注先名を入力", key="new_vendor_input"
-      )
-      if st.button("発注先を追加する", key="add_vendor_btn"):
-        if new_vendor.strip() == "":
-          st.warning("発注先名を入力してください。")
-        else:
-          conn_add = get_connection()
-          cursor_add = conn_add.cursor()
-          cursor_add.execute(
-              "SELECT * FROM vendors WHERE vendor_name=?", (new_vendor,)
-          )
-          exists = cursor_add.fetchone()
-          if exists:
-            st.warning("すでに登録されている発注先です。")
+      with tab_add:
+        new_vendor = st.text_input(
+            "新しい発注先名を入力", key="new_vendor_input"
+        )
+        if st.button("発注先を追加する", key="add_vendor_btn"):
+          if new_vendor.strip() == "":
+            st.warning("発注先名を入力してください。")
           else:
+            conn_add = get_connection()
+            cursor_add = conn_add.cursor()
             cursor_add.execute(
-                "INSERT INTO vendors (vendor_name) VALUES (?)", (new_vendor,)
+                "SELECT * FROM vendors WHERE vendor_name=?", (new_vendor,)
             )
-            conn_add.commit()
-            st.success(f"「{new_vendor}」を追加しました！")
-            st.rerun()
-          conn_add.close()
-
-    with tab_edit:
-      if len(vendor_list) > 0:
-        target_vendor = st.selectbox(
-            "変更・削除する発注先を選択",
-            vendor_list,
-            key="target_vendor_selectbox",
-        )
-        edit_vendor_name = st.text_input(
-            "新しい発注先名（変更する場合に入力）",
-            value=target_vendor,
-            key="edit_vendor_input",
-        )
-
-        col_e1, col_e2 = st.columns(2)
-        with col_e1:
-          if st.button("発注先名を変更する", key="update_vendor_btn"):
-            if edit_vendor_name.strip() == "":
-              st.warning("変更後の名前を入力してください。")
+            exists = cursor_add.fetchone()
+            if exists:
+              st.warning("すでに登録されている発注先です。")
             else:
-              conn_ed = get_connection()
-              cursor_ed = conn_ed.cursor()
-              cursor_ed.execute(
-                  "UPDATE vendors SET vendor_name=? WHERE vendor_name=?",
-                  (edit_vendor_name, target_vendor),
+              cursor_add.execute(
+                  "INSERT INTO vendors (vendor_name) VALUES (?)", (new_vendor,)
               )
-              cursor_ed.execute(
-                  "UPDATE orders SET vendor_name=? WHERE vendor_name=?",
-                  (edit_vendor_name, target_vendor),
-              )
-              conn_ed.commit()
-              conn_ed.close()
-              st.success(
-                  f"発注先名を「{edit_vendor_name}」に変更しました！"
-              )
+              conn_add.commit()
+              st.success(f"「{new_vendor}」を追加しました！")
               st.rerun()
-        with col_e2:
-          if st.button(
-              "この発注先を削除する", type="primary", key="delete_vendor_btn"
-          ):
-            conn_del = get_connection()
-            cursor_del = conn_del.cursor()
-            cursor_del.execute(
-                "DELETE FROM vendors WHERE vendor_name=?", (target_vendor,)
-            )
-            conn_del.commit()
-            conn_del.close()
-            st.success(f"発注先「{target_vendor}」を削除しました。")
-            st.rerun()
-      else:
-        st.info("変更・削除できる発注先がありません。")
+            conn_add.close()
+
+      with tab_edit:
+        conn_v = get_connection()
+        cursor_v = conn_v.cursor()
+        cursor_v.execute("SELECT vendor_name FROM vendors")
+        vendor_list_edit = [row["vendor_name"] for row in cursor_v.fetchall()]
+        conn_v.close()
+
+        if len(vendor_list_edit) > 0:
+          target_vendor = st.selectbox(
+              "変更・削除する発注先を選択",
+              vendor_list_edit,
+              key="target_vendor_selectbox",
+          )
+          edit_vendor_name = st.text_input(
+              "新しい発注先名（変更する場合に入力）",
+              value=target_vendor,
+              key="edit_vendor_input",
+          )
+
+          col_e1, col_e2 = st.columns(2)
+          with col_e1:
+            if st.button("発注先名を変更する", key="update_vendor_btn"):
+              if edit_vendor_name.strip() == "":
+                st.warning("変更後の名前を入力してください。")
+              else:
+                conn_ed = get_connection()
+                cursor_ed = conn_ed.cursor()
+                cursor_ed.execute(
+                    "UPDATE vendors SET vendor_name=? WHERE vendor_name=?",
+                    (edit_vendor_name, target_vendor),
+                )
+                cursor_ed.execute(
+                    "UPDATE orders SET vendor_name=? WHERE vendor_name=?",
+                    (edit_vendor_name, target_vendor),
+                )
+                conn_ed.commit()
+                conn_ed.close()
+                st.success(
+                    f"発注先名を「{edit_vendor_name}」に変更しました！"
+                )
+                st.rerun()
+          with col_e2:
+            if st.button(
+                "この発注先を削除する", type="primary", key="delete_vendor_btn"
+            ):
+              conn_del = get_connection()
+              cursor_del = conn_del.cursor()
+              cursor_del.execute(
+                  "DELETE FROM vendors WHERE vendor_name=?", (target_vendor,)
+              )
+              conn_del.commit()
+              conn_del.close()
+              st.success(f"発注先「{target_vendor}」を削除しました。")
+              st.rerun()
+        else:
+          st.info("変更・削除できる発注先がありません。")
