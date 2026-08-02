@@ -66,6 +66,9 @@ def init_db():
         "INSERT INTO users (username, password, name, department, is_approver,"
         " is_admin) VALUES ('admin', '4727', '管理者', '総務部', 1, 1)"
     )
+  else:
+    # 既存の admin ユーザーのパスワードも強制的に 4727 に更新
+    cursor.execute("UPDATE users SET password='4727' WHERE username='admin'")
 
   conn.commit()
   conn.close()
@@ -624,16 +627,18 @@ else:
 
             st.divider()
 
+            # --- ここに品番を追加 ---
             copy_text_lines = [
-                f"発注者: {r['user_name']} | 品名: {r['item_name']} | 数量:"
-                f" {r['quantity']}{r['unit']} | 備考: {r['remarks'] or 'なし'}"
+                f"発注者: {r['user_name']} | 品名: {r['item_name']} | 品番:"
+                f" {r['item_code'] or 'なし'} | 数量: {r['quantity']}{r['unit']} |"
+                f" 備考: {r['remarks'] or 'なし'}"
                 for r in csv_rows
             ]
             st.markdown(
                 "### 📋 【承認済】テキスト表示エリア（コピーしてご利用ください）"
             )
             st.text_area(
-                "コピペ用テキスト（発注者・品名・数量・単位・備考）",
+                "コピペ用テキスト（発注者・品名・品番・数量・単位・備考）",
                 value="\n".join(copy_text_lines),
                 height=150,
                 key=f"copy_area_{selected_vendor}",
@@ -709,7 +714,7 @@ else:
               )
               if assign_v != "":
                 if st.button(
-                    "この発注体に設定する", key=f"assign_v_btn_{row['id']}"
+                    "この発注先に設定する", key=f"assign_v_btn_{row['id']}"
                 ):
                   conn_asg = get_connection()
                   cursor_asg = conn_asg.cursor()
