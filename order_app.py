@@ -59,12 +59,12 @@ def init_db():
     )
     """)
 
-  # ユーザーがひとりもいない場合は初期管理者を作成 (ID: admin / PW: admin123)
+  # ユーザーがひとりもいない場合は初期管理者を作成 (ID: admin / PW: 4727)
   cursor.execute("SELECT COUNT(*) FROM users")
   if cursor.fetchone()[0] == 0:
     cursor.execute(
         "INSERT INTO users (username, password, name, department, is_approver,"
-        " is_admin) VALUES ('admin', 'admin123', '管理者', '総務部', 1, 1)"
+        " is_admin) VALUES ('admin', '4727', '管理者', '総務部', 1, 1)"
     )
 
   conn.commit()
@@ -80,7 +80,6 @@ if "logged_in" not in st.session_state:
 
 if not st.session_state.logged_in:
   st.title("📦 消耗品発注システム - ログイン")
-  st.info("初期管理者アカウント ➡️ ログインID: admin | パスワード: admin123")
 
   username = st.text_input("ログインID")
   password = st.text_input("パスワード", type="password")
@@ -710,7 +709,7 @@ else:
               )
               if assign_v != "":
                 if st.button(
-                    "この発注先に設定する", key=f"assign_v_btn_{row['id']}"
+                    "この発注体に設定する", key=f"assign_v_btn_{row['id']}"
                 ):
                   conn_asg = get_connection()
                   cursor_asg = conn_asg.cursor()
